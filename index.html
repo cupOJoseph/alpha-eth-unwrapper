@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>alphaETH → ETH Unwrapper</title>
+  <meta name="description" content="A simple tool to unwrap ibETHv2/alphaETH and iWETH/cyWETH to ETH, then donate crypto to Joe." />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero card">
+      <p class="eyebrow">Ethereum Mainnet</p>
+      <h1>alphaETH / cyWETH Unwrapper</h1>
+      <p class="lede">
+        Connect MetaMask, unwrap <strong>alpha-ETH / ibETHv2</strong> to ETH, redeem
+        <strong>Yearn cyWETH / iWETH</strong> to WETH, then unwrap WETH to ETH.
+      </p>
+      <div class="actions">
+        <button id="connectBtn" class="primary">Connect wallet</button>
+        <a class="secondary" href="https://www.votejoe.org/crypto" target="_blank" rel="noopener">Donate crypto to Joe</a>
+      </div>
+      <p id="walletStatus" class="muted">Wallet not connected.</p>
+    </section>
+
+    <section class="grid">
+      <div class="card token-card">
+        <div class="token-head">
+          <div>
+            <p class="eyebrow">Token 1</p>
+            <h2>alpha-ETH / ibETHv2</h2>
+          </div>
+          <span id="alphaBalance" class="balance">—</span>
+        </div>
+        <p>Calls <code>withdraw(uint256)</code> on the alpha token contract. This burns ibETHv2 and sends ETH to your wallet.</p>
+        <button id="unwrapAlphaBtn" disabled>Unwrap all alpha-ETH to ETH</button>
+        <a class="contract" href="https://etherscan.io/address/0xeea3311250fe4c3268f8e684f7c87a82ff183ec1" target="_blank" rel="noopener">View contract</a>
+      </div>
+
+      <div class="card token-card">
+        <div class="token-head">
+          <div>
+            <p class="eyebrow">Token 2</p>
+            <h2>Yearn cyWETH / iWETH</h2>
+          </div>
+          <span id="cyBalance" class="balance">—</span>
+        </div>
+        <p>Calls <code>redeem(uint256)</code> on iWETH. This redeems cyWETH/iWETH into WETH.</p>
+        <button id="redeemCyBtn" disabled>Redeem all cyWETH to WETH</button>
+        <a class="contract" href="https://etherscan.io/token/0x41c84c0e2ee0b740cf0d31f63f3b6f627dc6b393" target="_blank" rel="noopener">View contract</a>
+      </div>
+
+      <div class="card token-card wide">
+        <div class="token-head">
+          <div>
+            <p class="eyebrow">Final step</p>
+            <h2>WETH → ETH</h2>
+          </div>
+          <span id="wethBalance" class="balance">—</span>
+        </div>
+        <p>After redeeming cyWETH, unwrap WETH with <code>withdraw(uint256)</code> on the WETH contract.</p>
+        <button id="unwrapWethBtn" disabled>Unwrap all WETH to ETH</button>
+      </div>
+    </section>
+
+    <section class="card flow">
+      <h2>One-click guided flow</h2>
+      <p class="muted">This will prompt separate wallet transactions only when you have a balance for that step.</p>
+      <button id="runAllBtn" disabled>Run all unwrap steps</button>
+      <ol id="log" class="log"></ol>
+    </section>
+
+    <section id="doneCard" class="card done hidden">
+      <h2>ETH is ready</h2>
+      <p>Once the transactions confirm, your wallet should hold the resulting ETH.</p>
+      <a class="primary link-button" href="https://www.votejoe.org/crypto" target="_blank" rel="noopener">Donate crypto to Joe</a>
+    </section>
+
+    <footer>
+      <p>Built as a minimal static helper. Always verify transaction prompts in MetaMask before signing.</p>
+    </footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/web3modal@1.9.12/dist/index.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
