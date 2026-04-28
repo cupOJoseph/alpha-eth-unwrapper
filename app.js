@@ -1,158 +1,157 @@
 const MAINNET = 1;
-const RPC_URL = "https://eth-mainnet.g.alchemy.com/v2/WtGzKM0NAY_Mr3rAYlykQWnzPF6JbcHy";
-
-const ALPHA = "0xeea3311250fe4c3268f8e684f7c87a82ff183ec1"; // ibETHv2 / alpha-ETH SafeBoxETH
-const CYWETH = "0x41c84c0e2ee0b740cf0d31f63f3b6f627dc6b393"; // Iron Bank / Yearn cyWETH (iWETH)
+const ALPHA = "0xeea3311250fe4c3268f8e684f7c87a82ff183ec1"; // ibETHv2 / alpha-ETH
+const CYWETH = "0x41c84c0e2ee0b740cf0d31f63f3b6f627dc6b393"; // cyWETH / iWETH
 const WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 
 const ERC20_ABI = [
-  "function name() view returns (string)",
   "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
   "function balanceOf(address) view returns (uint256)"
 ];
-const ALPHA_ABI = [...ERC20_ABI, "function withdraw(uint256 amount)", "function cToken() view returns (address)"];
-const CYWETH_ABI = [...ERC20_ABI, "function redeem(uint256 redeemTokens) returns (uint256)", "function underlying() view returns (address)", "function exchangeRateStored() view returns (uint256)"];
+const ALPHA_ABI = [...ERC20_ABI, "function withdraw(uint256 amount)"];
+const CYWETH_ABI = [...ERC20_ABI, "function redeem(uint256 redeemTokens) returns (uint256)"];
 const WETH_ABI = [...ERC20_ABI, "function withdraw(uint256 wad)"];
 
-let web3Modal, externalProvider, provider, signer, account;
-let alpha, cyweth, weth;
-let balances = { alpha: ethers.constants.Zero, cyweth: ethers.constants.Zero, weth: ethers.constants.Zero };
+let modal, ext, provider, signer, account, alpha, cyweth, weth;
+let connected = false;
 
 const $ = (id) => document.getElementById(id);
-const els = {
-  connect: $("connectBtn"),
-  status: $("walletStatus"),
-  alphaBalance: $("alphaBalance"),
-  cyBalance: $("cyBalance"),
-  wethBalance: $("wethBalance"),
-  unwrapAlpha: $("unwrapAlphaBtn"),
-  redeemCy: $("redeemCyBtn"),
-  unwrapWeth: $("unwrapWethBtn"),
-  runAll: $("runAllBtn"),
-  log: $("log"),
-  done: $("doneCard")
-};
+const mainBtn = $("mainBtn");
+const statusEl = $("status");
+const balancesEl = $("balances");
+const messageEl = $("message");
+const donateBtn = $("donateBtn");
 
-function addLog(text) {
-  const li = document.createElement("li");
-  li.textContent = text;
-  els.log.prepend(li);
+function showMessage(text) {
+  messageEl.textContent = text;
+  messageEl.classList.remove("hidden");
 }
 
 function short(addr) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-function fmt(value, decimals = 8, places = 6) {
-  const s = ethers.utils.formatUnits(value, decimals);
+function formatUnits(v, decimals, places = 6) {
+  const s = ethers.utils.formatUnits(v, decimals);
   const [whole, frac = ""] = s.split(".");
   return frac ? `${whole}.${frac.slice(0, places).replace(/0+$/, "") || "0"}` : whole;
 }
 
-function setButtons() {
-  const connected = Boolean(account);
-  els.unwrapAlpha.disabled = !connected || balances.alpha.isZero();
-  els.redeemCy.disabled = !connected || balances.cyweth.isZero();
-  els.unwrapWeth.disabled = !connected || balances.weth.isZero();
-  els.runAll.disabled = !connected || (balances.alpha.isZero() && balances.cyweth.isZero() && balances.weth.isZero());
-  if (connected && balances.alpha.isZero() && balances.cyweth.isZero() && balances.weth.isZero()) {
-    els.done.classList.remove("hidden");
+function friendlyError(err) {
+  const raw = [err?.reason, err?.data?.message, err?.error?.message, err?.message, String(err)].filter(Boolean).join("\n");
+  if (raw.includes("credit account cannot redeem")) {
+    return "Alpha-ETH redemption is blocked by the underlying Iron Bank contract right now: “credit account cannot redeem.”\n\nThat is a contract-level revert from ibETHv2 → iWETH redeem, not a UI/gas-estimation problem. Manually setting gas will not fix it. If the wallet also has cyWETH/iWETH or WETH, this page will still unwrap those.";
   }
-}
-
-async function ensureMainnet() {
-  const net = await provider.getNetwork();
-  if (net.chainId === MAINNET) return;
-  if (!externalProvider?.request) throw new Error("Please switch wallet to Ethereum mainnet.");
-  await externalProvider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x1" }] });
-  provider = new ethers.providers.Web3Provider(externalProvider);
-  signer = provider.getSigner();
-}
-
-async function refreshBalances() {
-  if (!account) return;
-  balances.alpha = await alpha.balanceOf(account);
-  balances.cyweth = await cyweth.balanceOf(account);
-  balances.weth = await weth.balanceOf(account);
-  els.alphaBalance.textContent = `${fmt(balances.alpha, 8)} ibETHv2`;
-  els.cyBalance.textContent = `${fmt(balances.cyweth, 8)} iWETH`;
-  els.wethBalance.textContent = `${fmt(balances.weth, 18)} WETH`;
-  setButtons();
+  if (raw.includes("user rejected") || raw.includes("User denied")) return "Transaction rejected in wallet.";
+  if (raw.includes("insufficient funds")) return "Wallet does not have enough ETH for gas.";
+  return raw.slice(0, 700);
 }
 
 async function connect() {
-  externalProvider = await web3Modal.connect();
-  provider = new ethers.providers.Web3Provider(externalProvider);
-  await ensureMainnet();
+  ext = await modal.connect();
+  provider = new ethers.providers.Web3Provider(ext);
+  let net = await provider.getNetwork();
+  if (net.chainId !== MAINNET) {
+    await ext.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x1" }] });
+    provider = new ethers.providers.Web3Provider(ext);
+  }
   signer = provider.getSigner();
   account = await signer.getAddress();
   alpha = new ethers.Contract(ALPHA, ALPHA_ABI, signer);
   cyweth = new ethers.Contract(CYWETH, CYWETH_ABI, signer);
   weth = new ethers.Contract(WETH, WETH_ABI, signer);
-  els.status.textContent = `Connected: ${short(account)}`;
-  els.connect.textContent = "Wallet connected";
-  addLog("Wallet connected on Ethereum mainnet.");
-  externalProvider.on?.("accountsChanged", () => window.location.reload());
-  externalProvider.on?.("chainChanged", () => window.location.reload());
+  connected = true;
+  statusEl.textContent = `Connected: ${short(account)}`;
+  mainBtn.textContent = "Unwrap 100%";
+  ext.on?.("accountsChanged", () => window.location.reload());
+  ext.on?.("chainChanged", () => window.location.reload());
   await refreshBalances();
 }
 
-async function waitTx(tx, label) {
-  addLog(`${label}: transaction sent (${short(tx.hash)}). Waiting for confirmation…`);
+async function balances() {
+  return {
+    alpha: await alpha.balanceOf(account),
+    cyweth: await cyweth.balanceOf(account),
+    weth: await weth.balanceOf(account)
+  };
+}
+
+async function refreshBalances() {
+  const b = await balances();
+  balancesEl.innerHTML = [
+    `${formatUnits(b.alpha, 8)} ibETHv2 / alpha-ETH`,
+    `${formatUnits(b.cyweth, 8)} cyWETH / iWETH`,
+    `${formatUnits(b.weth, 18)} WETH`
+  ].join("<br>");
+  balancesEl.classList.remove("hidden");
+  return b;
+}
+
+async function wait(tx, label) {
+  showMessage(`${label}: transaction sent. Waiting for confirmation…\n${tx.hash}`);
   await tx.wait();
-  addLog(`${label}: confirmed.`);
-  await refreshBalances();
+  showMessage(`${label}: confirmed.`);
 }
 
-async function unwrapAlpha() {
-  await ensureMainnet();
-  await refreshBalances();
-  if (balances.alpha.isZero()) return addLog("No alpha-ETH / ibETHv2 balance to unwrap.");
-  const tx = await alpha.withdraw(balances.alpha);
-  await waitTx(tx, "alpha-ETH → ETH");
-}
-
-async function redeemCy() {
-  await ensureMainnet();
-  await refreshBalances();
-  if (balances.cyweth.isZero()) return addLog("No cyWETH / iWETH balance to redeem.");
-  const result = await cyweth.callStatic.redeem(balances.cyweth);
-  if (!ethers.BigNumber.from(result).isZero()) throw new Error(`iWETH redeem preview failed with code ${result.toString()}`);
-  const tx = await cyweth.redeem(balances.cyweth);
-  await waitTx(tx, "cyWETH → WETH");
-}
-
-async function unwrapWeth() {
-  await ensureMainnet();
-  await refreshBalances();
-  if (balances.weth.isZero()) return addLog("No WETH balance to unwrap.");
-  const tx = await weth.withdraw(balances.weth);
-  await waitTx(tx, "WETH → ETH");
-}
-
-async function runAll() {
+async function unwrapAll() {
+  mainBtn.disabled = true;
+  donateBtn.classList.add("hidden");
+  const notes = [];
   try {
-    await unwrapAlpha();
-    await redeemCy();
-    await unwrapWeth();
-    addLog("All available unwrap steps are complete. You can donate crypto to Joe now.");
-    els.done.classList.remove("hidden");
-  } catch (err) {
-    console.error(err);
-    addLog(`Stopped: ${err?.message || err}`);
+    let b = await refreshBalances();
+
+    if (!b.alpha.isZero()) {
+      try {
+        await alpha.callStatic.withdraw(b.alpha);
+        await wait(await alpha.withdraw(b.alpha), "alpha-ETH → ETH");
+      } catch (err) {
+        notes.push(friendlyError(err));
+      }
+    } else {
+      notes.push("No alpha-ETH / ibETHv2 balance found.");
+    }
+
+    b = await refreshBalances();
+    if (!b.cyweth.isZero()) {
+      try {
+        const preview = await cyweth.callStatic.redeem(b.cyweth);
+        if (!ethers.BigNumber.from(preview).isZero()) throw new Error(`cyWETH redeem returned error code ${preview.toString()}`);
+        await wait(await cyweth.redeem(b.cyweth), "cyWETH → WETH");
+      } catch (err) {
+        notes.push(`cyWETH redeem failed: ${friendlyError(err)}`);
+      }
+    } else {
+      notes.push("No cyWETH / iWETH balance found.");
+    }
+
+    b = await refreshBalances();
+    if (!b.weth.isZero()) {
+      try {
+        await wait(await weth.withdraw(b.weth), "WETH → ETH");
+      } catch (err) {
+        notes.push(`WETH unwrap failed: ${friendlyError(err)}`);
+      }
+    } else {
+      notes.push("No WETH balance found.");
+    }
+
+    await refreshBalances();
+    showMessage(notes.join("\n\n"));
+    donateBtn.classList.remove("hidden");
+  } finally {
+    mainBtn.disabled = false;
   }
 }
 
 window.addEventListener("load", () => {
-  web3Modal = new window.Web3Modal.default({
-    cacheProvider: false,
-    providerOptions: {},
-    theme: "dark"
+  modal = new window.Web3Modal.default({ cacheProvider: false, providerOptions: {}, theme: "dark" });
+  mainBtn.addEventListener("click", async () => {
+    try {
+      if (!connected) await connect();
+      else await unwrapAll();
+    } catch (err) {
+      showMessage(friendlyError(err));
+      mainBtn.disabled = false;
+    }
   });
-  els.connect.addEventListener("click", () => connect().catch((err) => addLog(err?.message || String(err))));
-  els.unwrapAlpha.addEventListener("click", () => unwrapAlpha().catch((err) => addLog(err?.message || String(err))));
-  els.redeemCy.addEventListener("click", () => redeemCy().catch((err) => addLog(err?.message || String(err))));
-  els.unwrapWeth.addEventListener("click", () => unwrapWeth().catch((err) => addLog(err?.message || String(err))));
-  els.runAll.addEventListener("click", runAll);
 });
